@@ -1,3 +1,4 @@
+# file: local_training.py
 import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel
@@ -15,7 +16,12 @@ class SimpleModel(nn.Module):
         return self.fc(x)
 
 def main(rank, world_size):
-    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+    dist.init_process_group(
+        "gloo",
+        rank=rank,
+        world_size=world_size,
+        init_method='tcp://34.123.45.67:6436' # Use the actual IP of your AWS instance here
+    )
 
     # Load the iris dataset
     iris = load_iris()
