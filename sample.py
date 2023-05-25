@@ -1,4 +1,3 @@
-# file: local_training.py
 import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel
@@ -20,7 +19,7 @@ def main(rank, world_size):
         "gloo",
         rank=rank,
         world_size=world_size,
-        init_method='tcp://34.123.45.67:6436' # Use the actual IP of your AWS instance here
+        init_method='tcp://ec2-13-56-161-92.us-west-1.compute.amazonaws.com:6436'
     )
 
     # Load the iris dataset
