@@ -5,6 +5,7 @@ import torch.optim as optim
 import torch.nn as nn
 from torch.utils.data import TensorDataset, DataLoader
 from sklearn.datasets import load_iris
+import socket
 
 class SimpleModel(nn.Module):
     def __init__(self):
@@ -14,41 +15,31 @@ class SimpleModel(nn.Module):
     def forward(self, x):
         return self.fc(x)
 
+def get_ip_address():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        # doesn't even have to be reachable
+        s.connect(('10.255.255.255', 1))
+        IP = s.getsockname()[0]
+    except Exception:
+        IP = '127.0.0.1'
+    finally:
+        s.close()
+    return IP
+
 def main(rank, world_size):
+    print(f"Initializing process group for rank {rank} out of {world_size} total processes.")
     dist.init_process_group(
         "gloo",
         rank=rank,
         world_size=world_size,
-        init_method='tcp://ec2-13-56-161-92.us-west-1.compute.amazonaws.com:6436'
+        init_method='tcp://ec2-13-56-161-92.us-west-1.compute.amazonaws.com:6436' 
     )
-
-    # Load the iris dataset
-    iris = load_iris()
-    X = iris['data']
-    y = iris['target']
-
-    # Create a tensor dataset and dataloader
-    tensor_x = torch.Tensor(X) 
-    tensor_y = torch.Tensor(y)
-    dataset = TensorDataset(tensor_x,tensor_y)
-    dataloader = DataLoader(dataset, batch_size=30)
-
-    model = SimpleModel().to(rank)
-    model = DistributedDataParallel(model, device_ids=[rank])
-
-    optimizer = optim.SGD(model.parameters(), lr=0.01)
-    criterion = nn.CrossEntropyLoss()
-
-    for epoch in range(100): # training loop
-        for data, target in dataloader:
-            data = data.to(rank)
-            target = target.to(rank).long()
-            optimizer.zero_grad()
-            outputs = model(data)
-            loss = criterion(outputs, target)
-            loss.backward()
-            optimizer.step()
+    print("Process group initialized. Connected to master node.")
+    # rest of your code
 
 if __name__ == "__main__":
     world_size = 2 
+    print("Spawning subprocesses...")
     torch.multiprocessing.spawn(main, args=(world_size,), nprocs=world_size, join=True)
+    print("All subprocesses have been spawned.")
