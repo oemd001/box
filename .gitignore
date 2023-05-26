@@ -1,3 +1,3 @@
 /pytorch
-data/
-dist_train/
+/data
+/dist_train/

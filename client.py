@@ -1,54 +1,45 @@
-import socket
-import pickle
-import numpy as np
+import torch
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel
+import torch.optim as optim
+import torch.nn as nn
+from torch.utils.data import TensorDataset, DataLoader
 from sklearn.datasets import load_iris
-from PIL import Image
+import socket
 
-# Define the IP address and port of the coordinating node (master)
-master_ip = 'IP_ADDRESS_OF_MASTER'
-master_port = 12345
+class SimpleModel(nn.Module):
+    def __init__(self):
+        super(SimpleModel, self).__init__()
+        self.fc = nn.Linear(4, 3)
 
-def load_image(image_path):
-    image = Image.open(image_path)
-    image = image.resize((224, 224))  # Resize the image to the desired input size
-    image = np.array(image) / 255.0  # Normalize pixel values to [0, 1]
-    return image
+    def forward(self, x):
+        return self.fc(x)
 
-def classify_image(image):
-    # Load your image classification model and perform inference
-    # Replace this with your actual image classification code
-    # Return the predicted label or class probabilities
-    pass
+def get_ip_address():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        # doesn't even have to be reachable
+        s.connect(('10.255.255.255', 1))
+        IP = s.getsockname()[0]
+    except Exception:
+        IP = '127.0.0.1'
+    finally:
+        s.close()
+    return IP
 
-def run_slave():
-    # Connect to the coordinating node (master)
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.connect((master_ip, master_port))
-        print("Connected to the master.")
+def main(rank, world_size):
+    print(f"Initializing process group for rank {rank} out of {world_size} total processes.")
+    dist.init_process_group(
+        "gloo",
+        rank=rank,
+        world_size=world_size,
+        init_method='tcp://ec2-13-56-161-92.us-west-1.compute.amazonaws.com:6436' 
+    )
+    print("Process group initialized. Connected to master node.")
+    # rest of your code
 
-        while True:
-            # Receive a message from the master
-            message = s.recv(1024)
-
-            # Handle different types of messages
-            if message == b'exit':
-                print("Received exit signal from the master. Exiting.")
-                break
-            elif message.startswith(b'image:'):
-                # Extract image path from the message
-                image_path = message.decode().split(':')[1]
-
-                # Load and preprocess the image
-                image = load_image(image_path)
-
-                # Perform image classification
-                prediction = classify_image(image)
-
-                # Send the prediction back to the master
-                response = pickle.dumps(prediction)
-                s.sendall(response)
-
-    print("Slave process completed.")
-
-if __name__ == '__main__':
-    run_slave()
+if __name__ == "__main__":
+    world_size = 2 
+    print("Spawning subprocesses...")
+    torch.multiprocessing.spawn(main, args=(world_size,), nprocs=world_size, join=True)
+    print("All subprocesses have been spawned.")
