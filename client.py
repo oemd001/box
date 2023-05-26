@@ -33,7 +33,7 @@ def main(rank, world_size):
         "gloo",
         rank=rank,
         world_size=world_size,
-        init_method='tcp://ec2-13-56-161-92.us-west-1.compute.amazonaws.com:6436' 
+        init_method='tcp://13.56.161.92:6436' 
     )
     print("Process group initialized. Connected to master node.")
     # rest of your code
