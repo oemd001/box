@@ -18,7 +18,7 @@ def main(rank, world_size):
         "gloo",
         rank=rank,
         world_size=world_size,
-        init_method='tcp://127.0.0.1:6435'
+        init_method='tcp://127.0.0.1:6436'
     )
     print("Process group initialized. Ready to accept connections.")
 

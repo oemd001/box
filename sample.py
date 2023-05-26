@@ -6,6 +6,8 @@ import torch.nn as nn
 from torch.utils.data import TensorDataset, DataLoader
 from sklearn.datasets import load_iris
 import socket
+import signal
+import sys
 
 class SimpleModel(nn.Module):
     def __init__(self):
@@ -27,19 +29,31 @@ def get_ip_address():
         s.close()
     return IP
 
+stop = False
+
+def signal_handler(sig, frame):
+    print('You pressed Ctrl+C!')
+    global stop
+    stop = True
+
+signal.signal(signal.SIGINT, signal_handler)
+
 def main(rank, world_size):
     print(f"Initializing process group for rank {rank} out of {world_size} total processes.")
     dist.init_process_group(
-        "gloo",
+        "mpi",
         rank=rank,
         world_size=world_size,
-        init_method='tcp://ec2-13-56-161-92.us-west-1.compute.amazonaws.com:6436' 
+        init_method='tcp://13.56.161.92:6436'
     )
     print("Process group initialized. Connected to master node.")
     # rest of your code
 
 if __name__ == "__main__":
-    world_size = 2 
+    world_size = 2
     print("Spawning subprocesses...")
     torch.multiprocessing.spawn(main, args=(world_size,), nprocs=world_size, join=True)
     print("All subprocesses have been spawned.")
+    
+    while not stop:
+        pass  # keep the script running
