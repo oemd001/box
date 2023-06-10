@@ -25,6 +25,13 @@ HIVEMIND_THREADS=128 python run_trainer.py \
  ```
 Instead of COORDINATOR_IP:COORDINATOR_PORT, you can specify any existing trainers in the same format.
 
+* To start a CPU enabled trainer, run
+```
+HIVEMIND_THREADS=128 python run_trainer.py \
+--output_dir ./outputs_trainer --overwrite_output_dir  --logging_dir ./logs_trainer \
+--logging_first_step --logging_steps 100 --initial_peers COORDINATOR_IP:COORDINATOR_PORT \
+--experiment_prefix SOME_NAME --seed 42 --averaging_timeout 120 --bandwidth 1000 --fp16 False
+```
  
 * To start an auxiliary CPU peer, run
 ``` 
