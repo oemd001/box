@@ -146,134 +146,72 @@ class CheckpointHandler:
             logger.warning("Error while uploading model:", e.output)
 
 
-def main():
-    parser = HfArgumentParser((AlbertTrainingArguments, DatasetArguments, CollaborationArguments))
-    training_args, dataset_args, collaboration_args = parser.parse_args_into_dataclasses()
-    wandb.init()
+if __name__ == "__main__":
+    parser = HfArgumentParser((CoordinatorArguments, CollaborativeOptimizerArguments, AveragerArguments))
+    coordinator_args, collab_optimizer_args, averager_args = parser.parse_args_into_dataclasses()
 
-    logger.info(f"Found {len(collaboration_args.initial_peers)} initial peers: {collaboration_args.initial_peers}")
-    if len(collaboration_args.initial_peers) == 0:
-        raise ValueError("Please specify at least one network endpoint in initial peers.")
-
-    collaboration_args_dict = asdict(collaboration_args)
-    setup_logging(training_args)
-
-    # Set seed before initializing model.
-    set_seed(training_args.seed)
-
-    config = AlbertConfig.from_pretrained(dataset_args.config_path, cache_dir=dataset_args.cache_dir)
-    tokenizer = AlbertTokenizerFast.from_pretrained(dataset_args.tokenizer_path, cache_dir=dataset_args.cache_dir)
-    model = get_model(training_args, config, tokenizer)
-    model.to(training_args.device)
-
-    opt, scheduler = get_optimizer_and_scheduler(training_args, model)
-
-    validators, local_public_key = metrics_utils.make_validators(collaboration_args_dict["experiment_prefix"])
+    if coordinator_args.address is None:
+        logger.warning("No address specified. Attempting to infer address from DNS.")
+        coordinator_args.address = get_ip(GoogleDnsProvider)
+    experiment_prefix = coordinator_args.experiment_prefix
+    validators, local_public_key = metrics_utils.make_validators(experiment_prefix)
     dht = hivemind.DHT(
         start=True,
-        initial_peers=collaboration_args_dict.pop("initial_peers"),
-        listen=not collaboration_args_dict["client_mode"],
-        listen_on=collaboration_args_dict.pop("dht_listen_on"),
-        endpoint=collaboration_args_dict.pop("endpoint"),
+        listen_on=coordinator_args.dht_listen_on,
+        endpoint=f"{coordinator_args.address}:*",
+        initial_peers=coordinator_args.initial_peers,
         record_validators=validators,
     )
-    statistics_expiration = collaboration_args_dict.pop("statistics_expiration")
-    total_batch_size_per_step = training_args.per_device_train_batch_size * training_args.gradient_accumulation_steps
-    adjusted_target_batch_size = collaboration_args_dict.pop("target_batch_size") - collaboration_args_dict.pop(
-        "batch_size_lead"
-    )
 
-    collaborative_optimizer = hivemind.CollaborativeOptimizer(
-        opt=opt,
-        dht=dht,
-        scheduler=scheduler,
-        prefix=collaboration_args_dict.pop("experiment_prefix"),
-        compression_type=hivemind.utils.CompressionType.Value(collaboration_args_dict.pop("compression")),
-        batch_size_per_step=total_batch_size_per_step,
-        throughput=collaboration_args_dict.pop("bandwidth"),
-        target_batch_size=adjusted_target_batch_size,
-        client_mode=collaboration_args_dict.pop("client_mode"),
-        verbose=True,
-        start=True,
-        auxiliary=True,
-        allow_state_sharing=False,
-        **collaboration_args_dict,
-    )
+    logger.info(f"Running DHT root at {coordinator_args.address}:{dht.port}")
+
+    if coordinator_args.wandb_project is not None:
+        wandb.init(project=coordinator_args.wandb_project)
+
+    current_step = 0
+
+    checkpoint_handler = CheckpointHandler(coordinator_args, collab_optimizer_args, averager_args, dht)
 
     while True:
-        time.sleep(0.5)
-        collaborative_optimizer.step_aux()
+        metrics_dict = dht.get(experiment_prefix + "_metrics", latest=True)
+        if metrics_dict is not None:
+            metrics_dict = metrics_dict.value
+            metrics = [metrics_utils.LocalMetrics.parse_obj(metrics_dict[peer].value) for peer in metrics_dict]
+            latest_step = max(item.step for item in metrics)
+            if latest_step != current_step:
+                logger.info(f"Got metrics from {len(metrics)} peers")
 
+                for i in range(len(metrics)):
+                    logger.info(f"{i} peer {metrics[i]}")
+                current_step = latest_step
+                alive_peers = 0
+                num_batches = 0
+                sum_loss = 0
+                num_samples = 0
+                sum_perf = 0
+                sum_mini_steps = 0
+                for item in metrics:
+                    sum_loss += item.loss
+                    alive_peers += 1
+                    sum_perf += item.samples_per_second
+                    num_samples += item.samples_accumulated
+                    sum_mini_steps += item.mini_steps
+                current_loss = sum_loss / sum_mini_steps
 
-if __name__ == "__main__":
-    main()
-
-# if __name__ == "__main__":
-#     parser = HfArgumentParser((CoordinatorArguments, CollaborativeOptimizerArguments, AveragerArguments))
-#     coordinator_args, collab_optimizer_args, averager_args = parser.parse_args_into_dataclasses()
-
-#     if coordinator_args.address is None:
-#         logger.warning("No address specified. Attempting to infer address from DNS.")
-#         coordinator_args.address = get_ip(GoogleDnsProvider)
-#     experiment_prefix = coordinator_args.experiment_prefix
-#     validators, local_public_key = metrics_utils.make_validators(experiment_prefix)
-#     dht = hivemind.DHT(
-#         start=True,
-#         listen_on=coordinator_args.dht_listen_on,
-#         endpoint=f"{coordinator_args.address}:*",
-#         initial_peers=coordinator_args.initial_peers,
-#         record_validators=validators,
-#     )
-
-#     logger.info(f"Running DHT root at {coordinator_args.address}:{dht.port}")
-
-#     if coordinator_args.wandb_project is not None:
-#         wandb.init(project=coordinator_args.wandb_project)
-
-#     current_step = 0
-
-#     checkpoint_handler = CheckpointHandler(coordinator_args, collab_optimizer_args, averager_args, dht)
-
-#     while True:
-#         metrics_dict = dht.get(experiment_prefix + "_metrics", latest=True)
-#         if metrics_dict is not None:
-#             metrics_dict = metrics_dict.value
-#             metrics = [metrics_utils.LocalMetrics.parse_obj(metrics_dict[peer].value) for peer in metrics_dict]
-#             latest_step = max(item.step for item in metrics)
-#             if latest_step != current_step:
-#                 logger.info(f"Got metrics from {len(metrics)} peers")
-
-#                 for i in range(len(metrics)):
-#                     logger.info(f"{i} peer {metrics[i]}")
-#                 current_step = latest_step
-#                 alive_peers = 0
-#                 num_batches = 0
-#                 sum_loss = 0
-#                 num_samples = 0
-#                 sum_perf = 0
-#                 sum_mini_steps = 0
-#                 for item in metrics:
-#                     sum_loss += item.loss
-#                     alive_peers += 1
-#                     sum_perf += item.samples_per_second
-#                     num_samples += item.samples_accumulated
-#                     sum_mini_steps += item.mini_steps
-#                 current_loss = sum_loss / sum_mini_steps
-
-#                 if coordinator_args.wandb_project is not None:
-#                     wandb.log(
-#                         {
-#                             "loss": current_loss,
-#                             "alive peers": alive_peers,
-#                             "samples": num_samples,
-#                             "performance": sum_perf,
-#                             "step": latest_step,
-#                         }
-#                     )
-#                 if checkpoint_handler.is_time_to_save_state(current_step):
-#                     checkpoint_handler.save_state(current_step)
-#                     if checkpoint_handler.is_time_to_upload():
-#                         checkpoint_handler.upload_checkpoint(current_loss)
-#                 logger.info(f"Step #{current_step}\tloss = {current_loss:.5f}")
-#         logger.debug("Peer is still alive...")
-#         time.sleep(coordinator_args.refresh_period)
+                if coordinator_args.wandb_project is not None:
+                    wandb.log(
+                        {
+                            "loss": current_loss,
+                            "alive peers": alive_peers,
+                            "samples": num_samples,
+                            "performance": sum_perf,
+                            "step": latest_step,
+                        }
+                    )
+                if checkpoint_handler.is_time_to_save_state(current_step):
+                    checkpoint_handler.save_state(current_step)
+                    if checkpoint_handler.is_time_to_upload():
+                        checkpoint_handler.upload_checkpoint(current_loss)
+                logger.info(f"Step #{current_step}\tloss = {current_loss:.5f}")
+        logger.debug("Peer is still alive...")
+        time.sleep(coordinator_args.refresh_period)
