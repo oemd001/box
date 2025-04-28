@@ -1,128 +1,100 @@
-Below is the JavaScript (.js)-only version of the auth helper you asked for.
-Drop each file into your Cypress project exactly as named.
+Why Cypress doesn’t “see” your existing cookies
+
+Cypress always spins-up its own, temporary Chrome profile in /tmp (or %TEMP%) so every run starts with a clean slate.
+Playwright, by contrast, can launch a real browser profile (--user-data-dir) by default, so whatever cookies your normal Chrome session already has are instantly available.
+
+To make Cypress reuse those same profile cookies you have two practical options:
+
+Option	When to use	Effort	Downsides
+A. Inject the cookies programmatically (cy.session / cy.setCookie)	Works in any CI, keeps tests isolated	Low ↗	You still have to fetch / hard-code cookie values (like the GSSSO flow we built earlier).
+B. Point Cypress at your real Chrome profile with --user-data-dir	You already have a valid SSO session in Chrome & just want to piggy-back on it	Medium	Breaks test isolation (state leaks)Won’t work in a clean CI runner unless you sync the profile folderProfile path is OS- and user-specific
+
+Below is Option B—forcing Cypress to launch Chrome with your existing profile so all cookies, local-storage, etc. carry over exactly like Playwright.
 
 ⸻
 
-1 ▸ cypress.config.js
+1 · Locate your Chrome Beta profile folder
 
-// cypress.config.js  – Cypress v12 / v13 CommonJS syntax
+OS	Default user-data-dir	Profile name
+Windows	C:\Users\<YOU>\AppData\Local\Google\Chrome Beta\User Data	usually Default, or Profile 1, …
+macOS	~/Library/Application Support/Google/Chrome Beta	same
+Linux	~/.config/google-chrome-beta	same
+
+Open Chrome ➜ chrome://version to confirm the exact paths and profile name.
+
+⸻
+
+2 · Add a before:browser:launch hook in cypress.config.js
+
 const { defineConfig } = require('cypress');
-const { execSync }     = require('child_process');
-const fs               = require('fs');
-
-function getAccessCookies () {
-  /*  -------------------------------------------------------------
-      1) Negotiate with PingFederate / Kerberos
-      2) Store cookies in /tmp/cj.txt
-      3) Pull out GSSSO + IBDLogin and return them
-  ------------------------------------------------------------- */
-  const QA_IDP_URL   = process.env.QA_IDP_URL;
-  const CLIENT_ID    = process.env.CLIENT_ID;
-  const REDIRECT_URI = process.env.REDIRECT_URI;
-
-  const cmd = `curl -s -k -L --negotiate -u ":" \
-    -b /tmp/cj.txt -c /tmp/cj.txt \
-    "${QA_IDP_URL}?nonce=1234&scope=openid&response_type=id_token%20token&client_id=${CLIENT_ID}&access_token_manager_id=RefDefault&IdpAdapterId=Kerberos&response_mode=form_post&state=xyz&redirect_uri=${REDIRECT_URI}"`;
-
-  execSync(cmd);
-
-  const jar = fs.readFileSync('/tmp/cj.txt', 'utf8');
-  const gssso    = /GSSSO\s+([^\s]+)/.exec(jar)?.[1];
-  const ibdLogin = /IBDLogin\s+([^\s]+)/.exec(jar)?.[1];
-
-  if (!gssso || !ibdLogin) {
-    throw new Error('Kerberos handshake failed – cookies not found');
-  }
-
-  return { gssso, ibdLogin };
-}
+const path = require('path');
 
 module.exports = defineConfig({
   e2e: {
-    setupNodeEvents (on, config) {
-      const { gssso, ibdLogin } = getAccessCookies();
-      config.env.gssso    = gssso;
-      config.env.ibdLogin = ibdLogin;
+    setupNodeEvents(on, config) {
+      on('before:browser:launch', (browser = {}, launchOptions) => {
+        if (browser.name === 'chrome' || browser.name === 'chromium') {
+          //
+          // 1. Path to your *existing* Chrome Beta profile
+          //
+          const userDir = process.platform === 'win32'
+            ? 'C:\\Users\\<YOU>\\AppData\\Local\\Google\\Chrome Beta\\User Data'
+            : process.platform === 'darwin'
+              ? path.join(process.env.HOME, 'Library/Application Support/Google/Chrome Beta')
+              : path.join(process.env.HOME, '.config/google-chrome-beta');
+
+          // 2. (Optional) choose a profile folder inside that dir
+          const profileName = 'Default';        // or 'Profile 1', etc.
+
+          launchOptions.args.push(`--user-data-dir=${userDir}`);
+          launchOptions.args.push(`--profile-directory=${profileName}`);
+
+          // Optional: don’t let Cypress clear cookies between specs
+          config.isTextTerminal && (config.trashAssetsBeforeRuns = false);
+        }
+        return launchOptions;
+      });
+
       return config;
     },
-    baseUrl           : 'https://qa.ibdweb.site.gs.com',
-    chromeWebSecurity : false
+
+    baseUrl: 'https://qa.ibdweb.site.gs.com',
+    chromeWebSecurity: false
   }
 });
 
-
-
-⸻
-
-2 ▸ cypress/support/data-utils.js
-
-/// <reference types="cypress" />
-
-Cypress.Commands.add('open_dealSetup', () => {
-  const gssso    = Cypress.env('gssso');
-  const ibdLogin = Cypress.env('ibdLogin');
-
-  if (!gssso || !ibdLogin) {
-    throw new Error('Missing gssso / ibdLogin cookies in Cypress.env');
-  }
-
-  cy.setCookie('GSSSO',    gssso);
-  cy.setCookie('IBDLogin', ibdLogin);
-
-  // visit only after cookies are in place
-  cy.visit('/ecm-syndicate-link/#/deal/dealSetup/');
-});
-
-
+Replace <YOU> and profileName with your actual values.
 
 ⸻
 
-3 ▸ cypress/support/index.js
+3 · Run Cypress with Chrome Beta and keep the window visible
 
-import './data-utils.js';
+# Windows (PowerShell)
+npx cypress run --headed `
+  --browser "C:\Program Files\Google\Chrome Beta\Application\chrome.exe"
 
-Cypress.Cookies.defaults({
-  preserve: ['GSSSO', 'IBDLogin']
-});
+# macOS / Linux
+npx cypress run --headed \
+  --browser "/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta"
 
-(If your Node version doesn’t allow import in CommonJS, flip that one line to
-require('./data-utils.js');.)
-
-⸻
-
-4 ▸ cypress.env.json  (do not commit to Git)
-
-{
-  "QA_IDP_URL"  : "https://idfs-qa.gs.com/as/authorization.oauth2",
-  "CLIENT_ID"   : "f04c2914dfc04b29a6a08e1683295bba",
-  "REDIRECT_URI": "https://qa.ibdweb.site.gs.com/tokenLogin?authLevel=30000"
-}
-
-or export the same three variables in your shell before running Cypress.
+	•	Because we overrode before:browser:launch, Cypress will reuse the specified profile and inherit every cookie and login token already present.
+	•	Want to verify? Add cy.visit('/') and inspect DevTools—your auth cookies should already be there before any test code runs.
 
 ⸻
 
-5 ▸ Using the command in tests
+Common pitfalls
 
-// cypress/e2e/dealSetup.cy.js
-it('Create Deal', () => {
-  cy.open_dealSetup();     // ← replaces cy.visit()
-  // …the rest of your test remains unchanged
-});
+Symptom	Fix
+Cypress still opens a blank temp profile	Double-check that the launchOptions.args.push(...) lines actually run (add console.log(launchOptions.args) in the hook).
+“Another Chrome instance is running” error	Make sure the normal Chrome window is closed before launching Cypress; Chrome won’t allow two processes to lock the same profile simultaneously.
+Works locally but fails in CI	CI machines don’t have your profile directory. Use Option A (programmatic cookie injection) for CI.
+SSO expires mid-test	Even with the shared profile, Kerberos tokens might time-out. Consider refreshing them with cy.session() at the start of each spec.
 
 
 
 ⸻
 
-Running with Chrome Beta
+TL;DR
 
-# Interactive GUI
-npx cypress open --browser "/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta"
-
-# Headless
-npx cypress run  --browser "/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta" --headless
-
-(Use the Windows path if you’re on Windows, e.g.
-"C:\\Program Files\\Google\\Chrome Beta\\Application\\chrome.exe".)
-
-With these four JS files in place, Cypress grabs fresh Kerberos cookies, injects them, and your specs run authenticated—no more 401s.
+Add a before:browser:launch hook that pushes
+--user-data-dir=<path> and --profile-directory=<name> to Chrome’s arguments, then run Cypress with --headed --browser <Chrome Beta path>. Cypress will launch your real Chrome profile, carrying over the exact cookies Playwright sees.
