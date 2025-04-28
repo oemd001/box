@@ -1,26 +1,52 @@
+// tests/createDeal.e2e.spec.ts
 import { test, expect } from '@playwright/test';
-import { CreateDealPage, Common } from '../pages/createDeal.page';
+import { CreateDealPage, Common, DealData } from '../pages/createDeal.page';
 
-test.describe('Deal Creation:', () => {
+test.describe('Deal Creation – full flow', () => {
 
-  test('Should be able to navigate back to deal-type selection during create', async ({ page }) => {
+  test('should create a deal end-to-end', async ({ page }) => {
 
-    // arrange
+    /* ---------- arrange ---------- */
     const createDealPage = new CreateDealPage(page);
-    await page.goto('https://qa.ibdweb.site.gs.com/ecm-syndicate-link/#/deal/dealSetup/');
+    const dealData: DealData = {
+      region              : 'Americas',
+      dealType            : 'FO',
+      issuerName          : `E2E-TEST-${Date.now()}`,
+      issuerNationality   : 'United States',
+      issuerIndustrySector: 'TMT',
+      executionType       : 'Marketed',
+    };
+
+    await page.goto(
+      'https://qa.ibdweb.site.gs.com/ecm-syndicate-link/#/deal/dealSetup/'
+    );
     await createDealPage.waitTillPageCompletelyLoaded();
-    await createDealPage.selectRegion('Americas');
-    await createDealPage.selectDealType('FO');
 
-    // act
-    await createDealPage.enterDealDetails();
-    await Common.scrollUpToTop(page);
-    await Common.safeClick(createDealPage['dealDetailsBackButton']);
+    /* ---------- deal-setup screen ---------- */
+    await createDealPage.selectRegion(dealData.region);
+    await createDealPage.selectDealType(dealData.dealType);
+    await createDealPage.enterDealDetails(dealData);
 
-    // assert
-    await createDealPage.selectRegion();      
-    await createDealPage.selectDealType();
-    await createDealPage.assertCancelOrExitedDeal();
+    // execution type (Americas + BT need this in prod, but keeping example generic)
+    await page.locator('#executionTypeSelect').click();
+    await page.getByRole('option', { name: dealData.executionType! }).click();
+
+    await page.getByRole('button', { name: 'Create Deal' }).click();
+
+    /* ---------- pre-pricing tab ---------- */
+    await Common.waitForOverlayToDisappear(page);
+
+    // A quick “did we land?” sanity check: deal-name field now has placeholder = our name
+    await expect(
+      page.locator('#dealNameEntryBox input')
+    ).toHaveAttribute('placeholder', dealData.issuerName);
+
+    /* ---------- extra assertions / cleanup ---------- */
+    // If your app shows a toast or navigates to a URL with the dealId,
+    // add those expectations here.  Example:
+    //
+    // const url = page.url();
+    // expect(url).toMatch(/\/deal\/\d+\/prePricing/);
   });
 
 });
